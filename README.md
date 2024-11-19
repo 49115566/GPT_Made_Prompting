@@ -1,13 +1,12 @@
 # Stock Price Prediction using LSTM
 
-This project demonstrates how to develop a Python program that creates a neural network to predict the price of an individual stock using historical stock price data and relevant features.
-It was made with a prompt telling ChatGPT to make a prompt, and the code is the result!
+This projgram creates a neural network to predict the change of an individual stock using historical stock price data and relevant features.
 
 ## Features
 
 1. **Data Fetching**: 
     - Uses `yfinance` to fetch historical stock data.
-    - Calculates technical indicators like RSI and MACD.
+    - Calculates technical indicators like Simple Moving Averages (SMA) and Bollinger Bands.
 
 2. **Data Preprocessing**:
     - Cleans and prepares the data, including handling missing values.
@@ -16,11 +15,15 @@ It was made with a prompt telling ChatGPT to make a prompt, and the code is the 
 
 3. **Neural Network**:
     - Implements an LSTM model using TensorFlow/Keras.
-    - Configurable layers for time series forecasting.
+    - Optional Attention mechanism for improved performance.
 
 4. **Model Evaluation**:
     - Evaluates model performance using metrics like MAE, RMSE, and R-squared.
     - Plots predictions versus actual prices on the test set.
+    - Plots learning curves during training.
+
+5. **Hyperparameter Optimization**:
+    - Uses Optuna for hyperparameter tuning to find the best model configuration.
 
 ## Requirements
 
@@ -31,13 +34,14 @@ It was made with a prompt telling ChatGPT to make a prompt, and the code is the 
 - scikit-learn
 - tensorflow
 - matplotlib
+- optuna
 
 ## Installation
 
 Install the required packages using pip:
 
 ```bash
-pip install pandas numpy yfinance scikit-learn tensorflow matplotlib
+pip install pandas numpy yfinance scikit-learn tensorflow matplotlib optuna
 ```
 
 ## Usage
@@ -51,12 +55,12 @@ python marketpredictor.py
 ## Code Structure
 
 - `fetch_stock_data(ticker, start_date, end_date)`: Fetches stock data and calculates technical indicators.
-- `calculate_rsi(series, period)`: Calculates the Relative Strength Index (RSI).
-- `calculate_macd(series, fast_period, slow_period, signal_period)`: Calculates the Moving Average Convergence Divergence (MACD).
 - `preprocess_data(data, feature_columns, target_column, lookback)`: Preprocesses the data for model training.
-- `build_lstm_model(input_shape)`: Builds the LSTM model.
-- `evaluate_model(model, X_test, y_test, scaler, target_column)`: Evaluates the model performance.
-- `plot_predictions(y_test, predictions, title)`: Plots the predictions versus actual prices.
+- `build_lstm_model(input_shape, use_attention=False)`: Builds the LSTM model with optional Attention mechanism.
+- `evaluate_model(model, X_test, y_test, scaler_target)`: Evaluates the model performance.
+- `plot_results(y_true, y_pred, filename)`: Plots the predictions versus actual prices.
+- `plot_training_data(history, filename)`: Plots the learning curves during training.
+- `optimize_hyperparameters(X_train, y_train, X_val, y_val, input_shape)`: Optimizes hyperparameters using Optuna.
 
 ## Suggestions for Improvement
 
