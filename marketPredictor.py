@@ -88,7 +88,7 @@ def evaluate_model(model, X_test, y_test, scaler, future_steps=0):
 # Predict future stock prices
 def predict_future(model, last_data_point, future_steps, scaler):
     future_predictions = []
-    current_data = last_data_point
+    current_data = last_data_point.copy()
     
     for _ in range(future_steps):
         prediction = model.predict(current_data[np.newaxis, :, :])
@@ -96,8 +96,9 @@ def predict_future(model, last_data_point, future_steps, scaler):
         
         # Update current_data to include the new prediction
         current_data = np.roll(current_data, -1, axis=0)
-        current_data[-1, -1] = prediction
+        current_data[-1, -1] = prediction[0, 0]  # Ensure correct shape and value assignment
     
+    # Rescale predictions back to original scale
     future_predictions_rescaled = scaler.inverse_transform(
         np.hstack((np.zeros((len(future_predictions), scaler.min_.shape[0] - 1)), np.array(future_predictions).reshape(-1, 1)))
     )[:, -1]
