@@ -12,11 +12,16 @@ import matplotlib.pyplot as plt
 # Step 1: Fetch stock data
 def fetch_stock_data(ticker, start_date, end_date):
     data = yf.download(ticker, start=start_date, end=end_date)
+    data['PriceChange'] = calculate_price_change(data['Close'])
     data['RSI'] = calculate_rsi(data['Close'])
     data['MACD'], data['Signal'] = calculate_macd(data['Close'])
+    data = data.sort_index()  # Sort by date
     return data
 
 # Step 2: Technical indicators (RSI and MACD)
+def calculate_price_change(series):
+    return series.diff().dropna()
+
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -59,7 +64,7 @@ def build_lstm_model(input_shape):
     return model
 
 # Step 5: Train and evaluate model
-def evaluate_model(model, X_test, y_test, scaler):
+def evaluate_model(model, X_test, y_test, scaler, future_steps=0):
     predictions = model.predict(X_test)
     predictions_rescaled = scaler.inverse_transform(
         np.hstack((np.zeros((predictions.shape[0], scaler.min_.shape[0] - 1)), predictions))
@@ -73,7 +78,31 @@ def evaluate_model(model, X_test, y_test, scaler):
     r2 = r2_score(y_test_rescaled, predictions_rescaled)
     
     print(f"MAE: {mae}, RMSE: {rmse}, R^2: {r2}")
-    return predictions_rescaled, y_test_rescaled
+    
+    future_predictions = None
+    if future_steps > 0:
+        future_predictions = predict_future(model, X_test[-1], future_steps, scaler)
+    
+    return predictions_rescaled, y_test_rescaled, future_predictions
+
+# Predict future stock prices
+def predict_future(model, last_data_point, future_steps, scaler):
+    future_predictions = []
+    current_data = last_data_point
+    
+    for _ in range(future_steps):
+        prediction = model.predict(current_data[np.newaxis, :, :])
+        future_predictions.append(prediction[0, 0])
+        
+        # Update current_data to include the new prediction
+        current_data = np.roll(current_data, -1, axis=0)
+        current_data[-1, -1] = prediction
+    
+    future_predictions_rescaled = scaler.inverse_transform(
+        np.hstack((np.zeros((len(future_predictions), scaler.min_.shape[0] - 1)), np.array(future_predictions).reshape(-1, 1)))
+    )[:, -1]
+    
+    return future_predictions_rescaled
 
 # Step 6: Plot results
 def plot_predictions(y_true, y_pred, filename='predictions.png'):
@@ -94,18 +123,32 @@ if __name__ == '__main__':
     start_date = '2015-01-01'
     end_date = '2023-12-31'
     data = fetch_stock_data(ticker, start_date, end_date)
+    
+    # Verify sorting
+    print(data.head())
+    print(data.tail())
 
     feature_columns = ['Close', 'Volume', 'RSI', 'MACD', 'Signal']
-    target_column = 'Close'
+    target_column = 'PriceChange'
     
     X, y, scaler = preprocess_data(data, feature_columns, target_column)
-    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.2, random_state=42)
-    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+    
+    # Split data while maintaining chronological order
+    train_size = int(len(X) * 0.8)
+    val_size = int(len(X) * 0.1)
+    
+    X_train, y_train = X[:train_size], y[:train_size]
+    X_val, y_val = X[train_size:train_size + val_size], y[train_size:train_size + val_size]
+    X_test, y_test = X[train_size + val_size:], y[train_size + val_size:]
 
     # Build and train model
     model = build_lstm_model((X_train.shape[1], X_train.shape[2]))
     model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=20, batch_size=32)
 
     # Evaluate and plot results
-    predictions, y_test_rescaled = evaluate_model(model, X_test, y_test, scaler)
+    future_steps = 30  # Number of future days to predict
+    predictions, y_test_rescaled, future_predictions = evaluate_model(model, X_test, y_test, scaler, future_steps)
     plot_predictions(y_test_rescaled, predictions, 'predictions.png')
+    
+    if future_predictions is not None:
+        print("Future Predictions:", future_predictions)
