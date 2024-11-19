@@ -41,24 +41,24 @@ def preprocess_data(data, feature_columns, target_column, lookback=60):
     return np.array(X), np.array(y), scaler_features, scaler_target
 
 # Step 3: Build LSTM with optional Attention mechanism
-def build_lstm_model(input_shape, use_attention=False):
+def build_lstm_model(input_shape, units, dropout, learning_rate, use_attention=False):
     model = Sequential([
-        LSTM(64, return_sequences=True, input_shape=input_shape),
+        LSTM(units, return_sequences=True, input_shape=input_shape),
         BatchNormalization(),
-        Dropout(0.2),
-        LSTM(64, return_sequences=use_attention),
+        Dropout(dropout),
+        LSTM(units, return_sequences=use_attention),
         BatchNormalization(),
-        Dropout(0.2),
+        Dropout(dropout),
     ])
     if use_attention:
         model.add(Attention())
     model.add(Dense(32, activation='relu'))
     model.add(Dense(1))
-    model.compile(optimizer='adam', loss='mean_squared_error')
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate), loss='mean_squared_error')
     return model
 
 # Step 4: Train and evaluate the model
-def evaluate_model(model, X_test, y_test, scaler_target):
+def evaluate_model(model, X_test, y_test, scaler_target, future_steps=0):
     predictions = model.predict(X_test)
     predictions_rescaled = scaler_target.inverse_transform(predictions)
     y_test_rescaled = scaler_target.inverse_transform(y_test.reshape(-1, 1))
@@ -68,7 +68,24 @@ def evaluate_model(model, X_test, y_test, scaler_target):
     r2 = r2_score(y_test_rescaled, predictions_rescaled)
     
     print(f"MAE: {mae}, RMSE: {rmse}, R^2: {r2}")
-    return predictions_rescaled, y_test_rescaled
+
+    future_predictions = None
+    if future_steps > 0:
+        future_predictions = predict_future(model, X_test[-1], future_steps, scaler_target)
+    
+    return predictions_rescaled, y_test_rescaled, future_predictions
+
+def predict_future(model, X_test, future_steps, scaler_target):
+    predictions = []
+    current_input = X_test.copy()
+    
+    for _ in range(future_steps):
+        prediction = model.predict(current_input.reshape(1, *current_input.shape))
+        predictions.append(prediction)
+        current_input = np.append(current_input[1:], prediction, axis=0)
+    
+    predictions = np.array(predictions).reshape(-1, 1)
+    return scaler_target.inverse_transform(predictions)
 
 # Step 5: Plot results and learning curves
 def plot_results(y_true, y_pred, filename='results.png'):
@@ -78,7 +95,6 @@ def plot_results(y_true, y_pred, filename='results.png'):
     plt.title('Stock Price Predictions')
     plt.legend()
     plt.savefig(filename)
-    plt.close()
 
 def plot_training_data(history, filename='learning_curve.png'):
     # Plot learning curves
@@ -115,13 +131,6 @@ def optimize_hyperparameters(X_train, y_train, X_val, y_val, input_shape):
     study = optuna.create_study(direction='minimize')
     study.optimize(objective, n_trials=20)
     
-    # Save the best model
-    best_trial = study.best_trial
-    best_units = best_trial.params['units']
-    best_dropout = best_trial.params['dropout']
-    best_batch_size = best_trial.params['batch_size']
-    best_learning_rate = best_trial.params['learning_rate']
-    
     return study.best_params
 
 # Main function to tie everything together
@@ -155,7 +164,7 @@ if __name__ == '__main__':
         best_params = optimize_hyperparameters(X_train, y_train, X_val, y_val, input_shape)
 
         # Train model with optimized parameters
-        model = build_lstm_model(input_shape)
+        model = build_lstm_model(input_shape, best_params['units'], best_params['dropout'], best_params['learning_rate'])
         early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
         history = model.fit(X_train, y_train, validation_data=(X_val, y_val),
                             epochs=50, batch_size=best_params['batch_size'],
@@ -165,5 +174,7 @@ if __name__ == '__main__':
         model.save(model_path)
 
     # Evaluate and plot results
-    predictions, y_test_rescaled = evaluate_model(model, X_test, y_test, scaler_target)
+    predictions, y_test_rescaled, future_predictions = evaluate_model(model, X_test, y_test, scaler_target)
     plot_results(y_test_rescaled, predictions)
+    if future_predictions is not None:
+        print(f"Future predictions: {future_predictions}")
