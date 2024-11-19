@@ -59,13 +59,13 @@ def build_lstm_model(input_shape):
     return model
 
 # Step 5: Train and evaluate model
-def evaluate_model(model, X_test, y_test, scaler, target_column):
+def evaluate_model(model, X_test, y_test, scaler):
     predictions = model.predict(X_test)
     predictions_rescaled = scaler.inverse_transform(
-        np.hstack((np.zeros((predictions.shape[0], len(target_column) - 1)), predictions))
+        np.hstack((np.zeros((predictions.shape[0], scaler.min_.shape[0] - 1)), predictions))
     )[:, -1]
     y_test_rescaled = scaler.inverse_transform(
-        np.hstack((np.zeros((y_test.shape[0], len(target_column) - 1)), y_test.reshape(-1, 1)))
+        np.hstack((np.zeros((y_test.shape[0], scaler.min_.shape[0] - 1)), y_test.reshape(-1, 1)))
     )[:, -1]
     
     mae = mean_absolute_error(y_test_rescaled, predictions_rescaled)
@@ -76,15 +76,16 @@ def evaluate_model(model, X_test, y_test, scaler, target_column):
     return predictions_rescaled, y_test_rescaled
 
 # Step 6: Plot results
-def plot_predictions(y_test, predictions, title='Model Predictions vs Actual'):
-    plt.figure(figsize=(12, 6))
-    plt.plot(y_test, label='Actual')
-    plt.plot(predictions, label='Predicted')
-    plt.legend()
-    plt.title(title)
+def plot_predictions(y_true, y_pred, filename='predictions.png'):
+    plt.figure(figsize=(14, 7))
+    plt.plot(y_true, label='True Values')
+    plt.plot(y_pred, label='Predictions')
+    plt.title('Stock Price Predictions')
     plt.xlabel('Time')
     plt.ylabel('Price')
-    plt.show()
+    plt.legend()
+    plt.savefig(filename)
+    plt.close()
 
 # Main function to tie it all together
 if __name__ == '__main__':
@@ -106,5 +107,5 @@ if __name__ == '__main__':
     model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=20, batch_size=32)
 
     # Evaluate and plot results
-    predictions, y_test_rescaled = evaluate_model(model, X_test, y_test, scaler, feature_columns)
-    plot_predictions(y_test_rescaled, predictions)
+    predictions, y_test_rescaled = evaluate_model(model, X_test, y_test, scaler)
+    plot_predictions(y_test_rescaled, predictions, 'predictions.png')
