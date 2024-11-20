@@ -1,16 +1,15 @@
 import os
 import yfinance as yf
 import numpy as np
-import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.models import load_model
-from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization, Attention
+from tensorflow.keras.layers import Bidirectional, LSTM, Dense, Dropout, BatchNormalization, Attention
 from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.losses import Huber
 import optuna
 
 # Step 1: Fetch and preprocess stock data
@@ -22,13 +21,29 @@ def fetch_stock_data(ticker, start_date, end_date):
     data['Volatility'] = data['Close'].rolling(window=20).std()  # Volatility (standard deviation)
     data['UpperBB'] = data['SMA20'] + (2 * data['Volatility'])  # Bollinger Upper Band
     data['LowerBB'] = data['SMA20'] - (2 * data['Volatility'])  # Bollinger Lower Band
+    data['RSI'] = calculate_rsi(data['Close'])
+    data['MACD'], data['Signal'] = calculate_macd(data['Close'])
     return data.dropna()
+
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_macd(series, fast_period=12, slow_period=26, signal_period=9):
+    ema_fast = series.ewm(span=fast_period, adjust=False).mean()
+    ema_slow = series.ewm(span=slow_period, adjust=False).mean()
+    macd = ema_fast - ema_slow
+    signal = macd.ewm(span=signal_period, adjust=False).mean()
+    return macd, signal
 
 # Step 2: Preprocessing with separate scaling
 def preprocess_data(data, feature_columns, target_column, lookback=60):
     data = data.dropna()
     scaler_features = MinMaxScaler()
-    scaler_target = MinMaxScaler(feature_range=(-1, 1))
+    scaler_target = StandardScaler()  # Standard scaling to preserve variability
 
     features_scaled = scaler_features.fit_transform(data[feature_columns])
     target_scaled = scaler_target.fit_transform(data[[target_column]])
@@ -43,10 +58,10 @@ def preprocess_data(data, feature_columns, target_column, lookback=60):
 # Step 3: Build LSTM with optional Attention mechanism
 def build_lstm_model(input_shape, units, dropout, learning_rate, use_attention=False):
     model = Sequential([
-        LSTM(units, return_sequences=True, input_shape=input_shape),
+        Bidirectional(LSTM(units, return_sequences=True), input_shape=input_shape),
         BatchNormalization(),
         Dropout(dropout),
-        LSTM(units, return_sequences=use_attention),
+        Bidirectional(LSTM(units, return_sequences=use_attention)),
         BatchNormalization(),
         Dropout(dropout),
     ])
@@ -54,7 +69,7 @@ def build_lstm_model(input_shape, units, dropout, learning_rate, use_attention=F
         model.add(Attention())
     model.add(Dense(32, activation='relu'))
     model.add(Dense(1))
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate), loss='mean_squared_error')
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate), loss=Huber(delta=1.0))  # Huber loss
     return model
 
 # Step 4: Train and evaluate the model
@@ -66,26 +81,15 @@ def evaluate_model(model, X_test, y_test, scaler_target, future_steps=0):
     mae = mean_absolute_error(y_test_rescaled, predictions_rescaled)
     rmse = np.sqrt(mean_squared_error(y_test_rescaled, predictions_rescaled))
     r2 = r2_score(y_test_rescaled, predictions_rescaled)
-    
-    print(f"MAE: {mae}, RMSE: {rmse}, R^2: {r2}")
 
-    future_predictions = None
-    if future_steps > 0:
-        future_predictions = predict_future(model, X_test[-1], future_steps, scaler_target)
+    # Calculate directional accuracy
+    directional_correct = np.sum(
+        np.sign(predictions_rescaled) == np.sign(y_test_rescaled)
+    ) / len(y_test_rescaled)
     
-    return predictions_rescaled, y_test_rescaled, future_predictions
+    print(f"MAE: {mae}, RMSE: {rmse}, R^2: {r2}, Directional Accuracy: {directional_correct * 100:.2f}%")
 
-def predict_future(model, X_test, future_steps, scaler_target):
-    predictions = []
-    current_input = X_test.copy()
-    
-    for _ in range(future_steps):
-        prediction = model.predict(current_input.reshape(1, *current_input.shape))
-        predictions.append(prediction)
-        current_input = np.append(current_input[1:], prediction, axis=0)
-    
-    predictions = np.array(predictions).reshape(-1, 1)
-    return scaler_target.inverse_transform(predictions)
+    return predictions_rescaled, y_test_rescaled
 
 # Step 5: Plot results and learning curves
 def plot_results(y_true, y_pred, filename='results.png'):
@@ -133,18 +137,37 @@ def optimize_hyperparameters(X_train, y_train, X_val, y_val, input_shape):
     
     return study.best_params
 
+# Step 7: Predict future stock prices
+def predict_future(model, X_test, future_steps, scaler_target):
+    predictions = []
+    current_input = X_test.copy()
+    
+    for _ in range(future_steps):
+        prediction = model.predict(current_input.reshape(1, *current_input.shape))
+        predictions.append(prediction)
+        current_input = np.append(current_input[1:], prediction, axis=0)
+    
+    predictions = np.array(predictions).reshape(-1, 1)
+    return scaler_target.inverse_transform(predictions)
+
 # Main function to tie everything together
 if __name__ == '__main__':
     # Fetch data
     ticker = 'AAPL'
     start_date = '2015-01-01'
     end_date = '2023-12-31'
-    data = fetch_stock_data(ticker, start_date, end_date)
     
-    feature_columns = ['Close', 'Volume', 'SMA20', 'SMA50', 'Volatility', 'UpperBB', 'LowerBB']
+    feature_columns = ['Close', 'Volume', 'SMA20', 'SMA50', 'Volatility', 'UpperBB', 'LowerBB', 'RSI', 'MACD', 'Signal']
     target_column = 'PriceChange'
     lookback = 60
+
+    hyperparameter_tune = False
     
+    model_path = 'best_model.keras'
+    
+    
+    data = fetch_stock_data(ticker, start_date, end_date)
+
     X, y, scaler_features, scaler_target = preprocess_data(data, feature_columns, target_column, lookback)
     
     # Train-test-validation split
@@ -155,26 +178,32 @@ if __name__ == '__main__':
     X_val, y_val = X[train_size:train_size + val_size], y[train_size:train_size + val_size]
     X_test, y_test = X[train_size + val_size:], y[train_size + val_size:]
     
-    model_path = 'best_model.keras'
     if os.path.exists(model_path):
         model = load_model(model_path)
     else:
         # Hyperparameter tuning
         input_shape = (X_train.shape[1], X_train.shape[2])
-        best_params = optimize_hyperparameters(X_train, y_train, X_val, y_val, input_shape)
-
+        if hyperparameter_tune:
+            params = optimize_hyperparameters(X_train, y_train, X_val, y_val, input_shape)
+        else:
+            params = {
+                'units': 64,
+                'dropout': 0.2,
+                'learning_rate': 0.001,
+                'batch_size': 32
+            }
         # Train model with optimized parameters
-        model = build_lstm_model(input_shape, best_params['units'], best_params['dropout'], best_params['learning_rate'])
-        early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+        model = build_lstm_model(input_shape, params['units'], params['dropout'], params['learning_rate'])
+        early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
         history = model.fit(X_train, y_train, validation_data=(X_val, y_val),
-                            epochs=50, batch_size=best_params['batch_size'],
+                            epochs=50, batch_size=params['batch_size'],
                             callbacks=[early_stopping])
         
         plot_training_data(history)
         model.save(model_path)
 
     # Evaluate and plot results
-    predictions, y_test_rescaled, future_predictions = evaluate_model(model, X_test, y_test, scaler_target)
+    predictions, y_test_rescaled = evaluate_model(model, X_test, y_test, scaler_target)
     plot_results(y_test_rescaled, predictions)
-    if future_predictions is not None:
-        print(f"Future predictions: {future_predictions}")
+    # if future_predictions is not None:
+    #     print(f"Future predictions: {future_predictions}")
